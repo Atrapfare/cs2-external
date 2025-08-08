@@ -3,7 +3,31 @@
 #include <TlHelp32.h>
 #include <vector>
 #include <winternl.h>
+#include <thread>
+#include <chrono>
 #include "offsets.hpp" // Include the generated offsets
+#include "client_dll.hpp"
+
+// Simple Vector3 structure for position
+struct Vector3 {
+    float x, y, z;
+};
+
+// Offsets from client_dll.hpp for easier access
+namespace game_offsets {
+    // C_BaseEntity
+    constexpr std::ptrdiff_t m_iHealth = cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth;
+    constexpr std::ptrdiff_t m_pGameSceneNode = cs2_dumper::schemas::client_dll::C_BaseEntity::m_pGameSceneNode;
+
+    // CGameSceneNode
+    constexpr std::ptrdiff_t m_vecAbsOrigin = cs2_dumper::schemas::client_dll::CGameSceneNode::m_vecAbsOrigin;
+
+    // C_CSPlayerPawn
+    constexpr std::ptrdiff_t m_hPlayerController = cs2_dumper::schemas::client_dll::C_CSPlayerPawn::m_hPlayerController;
+
+    // CBasePlayerController
+    constexpr std::ptrdiff_t m_iszPlayerName = cs2_dumper::schemas::client_dll::CBasePlayerController::m_iszPlayerName;
+}
 
 // This project is for educational purposes only, to demonstrate the concept of handle hijacking.
 
@@ -151,10 +175,19 @@ HANDLE HijackExistingHandle(DWORD targetPid) {
     return NULL;
 }
 
-int main() {
-    std::cout << "--- CS2 Educational Handle Hijacking Tool ---" << std::endl;
+// Generic ReadProcessMemory wrapper
+template <typename T>
+T Read(HANDLE hProcess, uintptr_t address) {
+    T value;
+    SIZE_T bytesRead;
+    ReadProcessMemory(hProcess, (LPCVOID)address, &value, sizeof(T), &bytesRead);
+    return value;
+}
 
-    // 1. Find the Process ID of CS2
+int main() {
+    std::cout << "--- CS2 Player Information Tool ---" << std::endl;
+    std::cout << "[*] Searching for CS2 process..." << std::endl;
+
     const wchar_t* processName = L"cs2.exe";
     DWORD pid = GetProcessIdByName(processName);
 
@@ -165,7 +198,7 @@ int main() {
     }
     std::cout << "[+] Found CS2 process with PID: " << pid << std::endl;
 
-    // 2. Find and hijack a handle to the CS2 process
+    std::cout << "[*] Attempting to hijack a handle to CS2..." << std::endl;
     HANDLE hCs2 = HijackExistingHandle(pid);
 
     if (!hCs2) {
@@ -174,7 +207,7 @@ int main() {
         return 1;
     }
 
-    // 3. Get the base address of client.dll
+    std::cout << "[*] Searching for client.dll module..." << std::endl;
     const wchar_t* clientDllName = L"client.dll";
     uintptr_t clientBase = GetModuleBaseAddress(pid, clientDllName);
     if (clientBase == 0) {
@@ -185,33 +218,58 @@ int main() {
     }
     std::cout << "[+] Found " << clientDllName << " at address: 0x" << std::hex << clientBase << std::endl;
 
-    // 4. Use the hijacked handle and offsets to read memory
-    // Calculate the address of the entity list
     uintptr_t entityListAddr = clientBase + cs2_dumper::offsets::client_dll::dwEntityList;
-    std::cout << "[*] Calculated EntityList address: 0x" << std::hex << entityListAddr << std::endl;
+    std::cout << "[*] EntityList address: 0x" << std::hex << entityListAddr << std::endl;
 
-    std::cout << "[*] Attempting to read from EntityList address using the hijacked handle..." << std::endl;
+    std::cout << "\n--- Starting Player Data Loop ---" << std::endl;
 
-    // We'll try to read the first pointer in the entity list.
-    uintptr_t entityListContent = 0;
-    SIZE_T bytesRead = 0;
+    while (true) {
+        system("cls"); // Clear console for fresh data
+        std::cout << "--- Player Information ---" << std::endl;
+        std::cout << "Name\t\tHealth\t\tPosition (X, Y, Z)" << std::endl;
+        std::cout << "--------------------------------------------------------" << std::endl;
 
-    BOOL success = ReadProcessMemory(hCs2, (LPCVOID)entityListAddr, &entityListContent, sizeof(entityListContent), &bytesRead);
+        for (int i = 1; i <= 64; ++i) { // Iterate through possible players
+            uintptr_t listEntry = Read<uintptr_t>(hCs2, entityListAddr + (8 * (i & 0x1FF)));
+            if (!listEntry) continue;
 
-    if (success && bytesRead > 0) {
-        std::cout << "[+] Successfully read " << bytesRead << " bytes from EntityList." << std::endl;
-        std::cout << "[+] Value read (pointer to first entity?): 0x" << std::hex << entityListContent << std::endl;
-    } else {
-        std::cerr << "[-] Failed to read memory from EntityList address." << std::endl;
-        std::cerr << "[-] GetLastError(): " << GetLastError() << std::endl;
+            uintptr_t playerController = Read<uintptr_t>(hCs2, listEntry + 0x10);
+            if (!playerController) continue;
+
+            // Get Player Pawn
+            uint32_t playerPawnHandle = Read<uint32_t>(hCs2, playerController + game_offsets::m_hPlayerController);
+            if (playerPawnHandle == 0xFFFFFFFF) continue;
+
+            uintptr_t listEntry2 = Read<uintptr_t>(hCs2, entityListAddr + (0x8 * ((playerPawnHandle & 0x7FFF) >> 9)) + 0x10);
+            if(!listEntry2) continue;
+
+            uintptr_t playerPawn = Read<uintptr_t>(hCs2, listEntry2 + (0x78 * (playerPawnHandle & 0x1FF)));
+            if (!playerPawn) continue;
+
+            // Read player data
+            int health = Read<int>(hCs2, playerPawn + game_offsets::m_iHealth);
+            if (health <= 0 || health > 100) continue;
+
+            uintptr_t sceneNode = Read<uintptr_t>(hCs2, playerPawn + game_offsets::m_pGameSceneNode);
+            if (!sceneNode) continue;
+
+            Vector3 position = Read<Vector3>(hCs2, sceneNode + game_offsets::m_vecAbsOrigin);
+
+            char playerName[128];
+            ReadProcessMemory(hCs2, (LPCVOID)(playerController + game_offsets::m_iszPlayerName), &playerName, sizeof(playerName), NULL);
+
+            // Print player data
+            std::cout << playerName << "\t\t"
+                      << health << "\t\t"
+                      << position.x << ", " << position.y << ", " << position.z << std::endl;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Update every second
     }
 
-    std::cout << "[*] The main purpose (demonstrating handle hijacking and memory reading with offsets) is complete." << std::endl;
-
-    // 5. Clean up
+    // 5. Clean up (though loop is infinite)
     CloseHandle(hCs2);
     std::cout << "[+] Closed hijacked handle. Program finished." << std::endl;
-
     system("pause");
     return 0;
 }
