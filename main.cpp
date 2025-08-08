@@ -5,29 +5,14 @@
 #include <winternl.h>
 #include <thread>
 #include <chrono>
-#include "offsets.hpp" // Include the generated offsets
-#include "client_dll.hpp"
+#include <fcntl.h>
+#include <io.h>
+#include "globals.h"
 
 // Simple Vector3 structure for position
 struct Vector3 {
     float x, y, z;
 };
-
-// Offsets from client_dll.hpp for easier access
-namespace game_offsets {
-    // C_BaseEntity
-    constexpr std::ptrdiff_t m_iHealth = cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth;
-    constexpr std::ptrdiff_t m_pGameSceneNode = cs2_dumper::schemas::client_dll::C_BaseEntity::m_pGameSceneNode;
-
-    // CGameSceneNode
-    constexpr std::ptrdiff_t m_vecAbsOrigin = cs2_dumper::schemas::client_dll::CGameSceneNode::m_vecAbsOrigin;
-
-    // C_CSPlayerPawn
-    constexpr std::ptrdiff_t m_hPlayerController = cs2_dumper::schemas::client_dll::C_CSPlayerPawn::m_hPlayerController;
-
-    // CBasePlayerController
-    constexpr std::ptrdiff_t m_iszPlayerName = cs2_dumper::schemas::client_dll::CBasePlayerController::m_iszPlayerName;
-}
 
 // This project is for educational purposes only, to demonstrate the concept of handle hijacking.
 
@@ -102,13 +87,13 @@ uintptr_t GetModuleBaseAddress(DWORD procId, const wchar_t* modName) {
 HANDLE HijackExistingHandle(DWORD targetPid) {
     HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
     if (!hNtdll) {
-        std::cerr << "[-] Failed to get handle for ntdll.dll" << std::endl;
+        std::wcerr << L"[-] Failed to get handle for ntdll.dll" << std::endl;
         return NULL;
     }
 
     pfnNtQuerySystemInformation NtQuerySystemInformation = (pfnNtQuerySystemInformation)GetProcAddress(hNtdll, "NtQuerySystemInformation");
     if (!NtQuerySystemInformation) {
-        std::cerr << "[-] Failed to get address of NtQuerySystemInformation" << std::endl;
+        std::wcerr << L"[-] Failed to get address of NtQuerySystemInformation" << std::endl;
         return NULL;
     }
 
@@ -117,24 +102,24 @@ HANDLE HijackExistingHandle(DWORD targetPid) {
     NtQuerySystemInformation(static_cast<SYSTEM_INFORMATION_CLASS>(16), NULL, 0, &bufferSize);
 
     if (bufferSize == 0) {
-        std::cerr << "[-] NtQuerySystemInformation failed to return buffer size." << std::endl;
+        std::wcerr << L"[-] NtQuerySystemInformation failed to return buffer size." << std::endl;
         return NULL;
     }
 
     PSYSTEM_HANDLE_INFORMATION handleInfo = (PSYSTEM_HANDLE_INFORMATION)malloc(bufferSize);
     if (!handleInfo) {
-        std::cerr << "[-] Failed to allocate memory for handle information." << std::endl;
+        std::wcerr << L"[-] Failed to allocate memory for handle information." << std::endl;
         return NULL;
     }
 
     NTSTATUS status = NtQuerySystemInformation(static_cast<SYSTEM_INFORMATION_CLASS>(16), handleInfo, bufferSize, NULL);
     if (!NT_SUCCESS(status)) {
-        std::cerr << "[-] NtQuerySystemInformation failed with status (2): " << std::hex << status << std::endl;
+        std::wcerr << L"[-] NtQuerySystemInformation failed with status (2): " << std::hex << status << std::endl;
         free(handleInfo);
         return NULL;
     }
 
-    std::cout << "[+] Found " << handleInfo->HandleCount << " system handles." << std::endl;
+    std::wcout << L"[+] Found " << handleInfo->HandleCount << L" system handles." << std::endl;
 
     for (ULONG i = 0; i < handleInfo->HandleCount; i++) {
         SYSTEM_HANDLE handle = handleInfo->Handles[i];
@@ -161,8 +146,8 @@ HANDLE HijackExistingHandle(DWORD targetPid) {
         }
 
         if (GetProcessId(hDup) == targetPid) {
-            std::cout << "[+] Success! Hijacked a handle to CS2 (PID: " << targetPid << ") from process with PID: " << handle.ProcessId << std::endl;
-            std::cout << "[+] Handle value: 0x" << std::hex << (DWORD_PTR)hDup << std::endl;
+            std::wcout << L"[+] Success! Hijacked a handle to CS2 (PID: " << targetPid << L") from process with PID: " << handle.ProcessId << std::endl;
+            std::wcout << L"[+] Handle value: 0x" << std::hex << (DWORD_PTR)hDup << std::endl;
             free(handleInfo);
             return hDup;
         }
@@ -170,7 +155,7 @@ HANDLE HijackExistingHandle(DWORD targetPid) {
         CloseHandle(hDup);
     }
 
-    std::cerr << "[-] Could not find a suitable handle to hijack." << std::endl;
+    std::wcerr << L"[-] Could not find a suitable handle to hijack." << std::endl;
     free(handleInfo);
     return NULL;
 }
@@ -185,49 +170,52 @@ T Read(HANDLE hProcess, uintptr_t address) {
 }
 
 int main() {
-    std::cout << "--- CS2 Player Information Tool ---" << std::endl;
-    std::cout << "[*] Searching for CS2 process..." << std::endl;
+	_setmode(_fileno(stdout), _O_U16TEXT);
+	_setmode(_fileno(stderr), _O_U16TEXT);
+
+    std::wcout << L"--- CS2 Player Information Tool ---" << std::endl;
+    std::wcout << L"[*] Searching for CS2 process..." << std::endl;
 
     const wchar_t* processName = L"cs2.exe";
     DWORD pid = GetProcessIdByName(processName);
 
     if (pid == 0) {
-        std::cerr << "[-] Could not find process: " << processName << ". Is the game running?" << std::endl;
+        std::wcerr << L"[-] Could not find process: " << processName << L". Is the game running?" << std::endl;
         system("pause");
         return 1;
     }
-    std::cout << "[+] Found CS2 process with PID: " << pid << std::endl;
+    std::wcout << L"[+] Found CS2 process with PID: " << pid << std::endl;
 
-    std::cout << "[*] Attempting to hijack a handle to CS2..." << std::endl;
+    std::wcout << L"[*] Attempting to hijack a handle to CS2..." << std::endl;
     HANDLE hCs2 = HijackExistingHandle(pid);
 
     if (!hCs2) {
-        std::cerr << "[-] Failed to get a handle to CS2 via hijacking." << std::endl;
+        std::wcerr << L"[-] Failed to get a handle to CS2 via hijacking." << std::endl;
         system("pause");
         return 1;
     }
 
-    std::cout << "[*] Searching for client.dll module..." << std::endl;
+    std::wcout << L"[*] Searching for client.dll module..." << std::endl;
     const wchar_t* clientDllName = L"client.dll";
     uintptr_t clientBase = GetModuleBaseAddress(pid, clientDllName);
     if (clientBase == 0) {
-        std::cerr << "[-] Could not find " << clientDllName << " in the process." << std::endl;
+        std::wcerr << L"[-] Could not find " << clientDllName << L" in the process." << std::endl;
         CloseHandle(hCs2);
         system("pause");
         return 1;
     }
-    std::cout << "[+] Found " << clientDllName << " at address: 0x" << std::hex << clientBase << std::endl;
+    std::wcout << L"[+] Found " << clientDllName << L" at address: 0x" << std::hex << clientBase << std::endl;
 
     uintptr_t entityListAddr = clientBase + cs2_dumper::offsets::client_dll::dwEntityList;
-    std::cout << "[*] EntityList address: 0x" << std::hex << entityListAddr << std::endl;
+    std::wcout << L"[*] EntityList address: 0x" << std::hex << entityListAddr << std::endl;
 
-    std::cout << "\n--- Starting Player Data Loop ---" << std::endl;
+    std::wcout << L"\n--- Starting Player Data Loop ---" << std::endl;
 
     while (true) {
         system("cls"); // Clear console for fresh data
-        std::cout << "--- Player Information ---" << std::endl;
-        std::cout << "Name\t\tHealth\t\tPosition (X, Y, Z)" << std::endl;
-        std::cout << "--------------------------------------------------------" << std::endl;
+        std::wcout << L"--- Player Information ---" << std::endl;
+        std::wcout << L"Name\t\tHealth\t\tPosition (X, Y, Z)" << std::endl;
+        std::wcout << L"--------------------------------------------------------" << std::endl;
 
         for (int i = 1; i <= 64; ++i) { // Iterate through possible players
             uintptr_t listEntry = Read<uintptr_t>(hCs2, entityListAddr + (8 * (i & 0x1FF)));
@@ -258,10 +246,13 @@ int main() {
             char playerName[128];
             ReadProcessMemory(hCs2, (LPCVOID)(playerController + game_offsets::m_iszPlayerName), &playerName, sizeof(playerName), NULL);
 
+			wchar_t widePlayerName[128];
+			MultiByteToWideChar(CP_UTF8, 0, playerName, -1, widePlayerName, 128);
+
             // Print player data
-            std::cout << playerName << "\t\t"
-                      << health << "\t\t"
-                      << position.x << ", " << position.y << ", " << position.z << std::endl;
+            std::wcout << widePlayerName << L"\t\t"
+                      << health << L"\t\t"
+                      << position.x << L", " << position.y << L", " << position.z << std::endl;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Update every second
@@ -269,7 +260,7 @@ int main() {
 
     // 5. Clean up (though loop is infinite)
     CloseHandle(hCs2);
-    std::cout << "[+] Closed hijacked handle. Program finished." << std::endl;
+    std::wcout << L"[+] Closed hijacked handle. Program finished." << std::endl;
     system("pause");
     return 0;
 }
