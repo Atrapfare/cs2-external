@@ -7,12 +7,22 @@
 #include <chrono>
 #include <fcntl.h>
 #include <io.h>
-#include "globals.h"
+#include "offsets.hpp"
+#include "client_dll.hpp"
 
 // Simple Vector3 structure for position
 struct Vector3 {
     float x, y, z;
 };
+
+// Placeholder namespace for offsets that were not found in the provided headers.
+// The values below are set to 0 and will likely cause incorrect behavior.
+// Please find the correct offsets for your game version and update them.
+namespace game_offsets {
+    constexpr std::ptrdiff_t m_iHealth = 0; // Placeholder
+    constexpr std::ptrdiff_t m_pGameSceneNode = 0; // Placeholder
+    constexpr std::ptrdiff_t m_vecAbsOrigin = 0; // Placeholder
+}
 
 // This project is for educational purposes only, to demonstrate the concept of handle hijacking.
 
@@ -225,7 +235,9 @@ int main() {
             if (!playerController) continue;
 
             // Get Player Pawn
-            uint32_t playerPawnHandle = Read<uint32_t>(hCs2, playerController + game_offsets::m_hPlayerController);
+            // NOTE: The original code used `game_offsets::m_hPlayerController`, which is not defined in the provided headers.
+            // Based on the context (getting a pawn handle from a controller), it has been replaced with `CBasePlayerController::m_hPawn`.
+            uint32_t playerPawnHandle = Read<uint32_t>(hCs2, playerController + cs2_dumper::schemas::client_dll::CBasePlayerController::m_hPawn);
             if (playerPawnHandle == 0xFFFFFFFF) continue;
 
             uintptr_t listEntry2 = Read<uintptr_t>(hCs2, entityListAddr + (0x8 * ((playerPawnHandle & 0x7FFF) >> 9)) + 0x10);
@@ -244,7 +256,7 @@ int main() {
             Vector3 position = Read<Vector3>(hCs2, sceneNode + game_offsets::m_vecAbsOrigin);
 
             char playerName[128];
-            ReadProcessMemory(hCs2, (LPCVOID)(playerController + game_offsets::m_iszPlayerName), &playerName, sizeof(playerName), NULL);
+            ReadProcessMemory(hCs2, (LPCVOID)(playerController + cs2_dumper::schemas::client_dll::CBasePlayerController::m_iszPlayerName), &playerName, sizeof(playerName), NULL);
 
 			wchar_t widePlayerName[128];
 			MultiByteToWideChar(CP_UTF8, 0, playerName, -1, widePlayerName, 128);
