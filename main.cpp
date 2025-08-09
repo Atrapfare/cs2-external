@@ -19,9 +19,9 @@ struct Vector3 {
 // The values below are set to 0 and will likely cause incorrect behavior.
 // Please find the correct offsets for your game version and update them.
 namespace game_offsets {
-    constexpr std::ptrdiff_t m_iHealth = 0; // Placeholder
-    constexpr std::ptrdiff_t m_pGameSceneNode = 0; // Placeholder
-    constexpr std::ptrdiff_t m_vecAbsOrigin = 0; // Placeholder
+    constexpr std::ptrdiff_t m_iHealth = 0x34C; // C_BaseEntity->m_iHealth
+    constexpr std::ptrdiff_t m_pGameSceneNode = 0x330; // C_BaseEntity->m_pGameSceneNode
+    constexpr std::ptrdiff_t m_vecAbsOrigin = 0xD0; // CGameSceneNode->m_vecAbsOrigin
 }
 
 // This project is for educational purposes only, to demonstrate the concept of handle hijacking.
@@ -107,24 +107,26 @@ HANDLE HijackExistingHandle(DWORD targetPid) {
         return NULL;
     }
 
-    ULONG bufferSize = 0;
-    // Call with null buffer to get the required size
-    NtQuerySystemInformation(static_cast<SYSTEM_INFORMATION_CLASS>(16), NULL, 0, &bufferSize);
-
-    if (bufferSize == 0) {
-        std::wcerr << L"[-] NtQuerySystemInformation failed to return buffer size." << std::endl;
-        return NULL;
-    }
-
+    NTSTATUS status;
+    ULONG bufferSize = 0x10000; // Initial buffer size
     PSYSTEM_HANDLE_INFORMATION handleInfo = (PSYSTEM_HANDLE_INFORMATION)malloc(bufferSize);
+
     if (!handleInfo) {
         std::wcerr << L"[-] Failed to allocate memory for handle information." << std::endl;
         return NULL;
     }
 
-    NTSTATUS status = NtQuerySystemInformation(static_cast<SYSTEM_INFORMATION_CLASS>(16), handleInfo, bufferSize, NULL);
+    // Retry loop for NtQuerySystemInformation
+    while ((status = NtQuerySystemInformation(static_cast<SYSTEM_INFORMATION_CLASS>(16), handleInfo, bufferSize, &bufferSize)) == STATUS_INFO_LENGTH_MISMATCH) {
+        handleInfo = (PSYSTEM_HANDLE_INFORMATION)realloc(handleInfo, bufferSize);
+        if (!handleInfo) {
+            std::wcerr << L"[-] Failed to reallocate memory for handle information." << std::endl;
+            return NULL;
+        }
+    }
+
     if (!NT_SUCCESS(status)) {
-        std::wcerr << L"[-] NtQuerySystemInformation failed with status (2): " << std::hex << status << std::endl;
+        std::wcerr << L"[-] NtQuerySystemInformation failed with status: " << std::hex << status << std::endl;
         free(handleInfo);
         return NULL;
     }
