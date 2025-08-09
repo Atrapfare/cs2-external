@@ -39,25 +39,6 @@ Anyways if you want to see more of my stuff feel free to join my discord server 
 #define ProcessHandleType 0x7
 #define SystemHandleInformation 16
 
-typedef struct _UNICODE_STRING {
-    USHORT Length;
-    USHORT MaximumLength;
-    PWCH   Buffer;
-} UNICODE_STRING, * PUNICODE_STRING;
-
-typedef struct _OBJECT_ATTRIBUTES {
-    ULONG           Length;
-    HANDLE          RootDirectory;
-    PUNICODE_STRING ObjectName;
-    ULONG           Attributes;
-    PVOID           SecurityDescriptor;
-    PVOID           SecurityQualityOfService;
-}  OBJECT_ATTRIBUTES, * POBJECT_ATTRIBUTES;
-
-typedef struct _CLIENT_ID {
-    PVOID UniqueProcess;
-    PVOID UniqueThread;
-} CLIENT_ID, * PCLIENT_ID;
 
 typedef struct _SYSTEM_HANDLE_TABLE_ENTRY_INFO {
     ULONG ProcessId;
