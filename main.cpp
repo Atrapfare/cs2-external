@@ -18,7 +18,6 @@ Anyways if you want to see more of my stuff feel free to join my discord server 
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <vector>
-#include <winternl.h>
 #include <thread>
 #include <chrono>
 #include <fcntl.h>
