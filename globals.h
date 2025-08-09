@@ -15,7 +15,9 @@ namespace game_offsets {
     constexpr std::ptrdiff_t m_vecAbsOrigin = cs2_dumper::schemas::client_dll::CGameSceneNode::m_vecAbsOrigin;
 
     // C_CSPlayerPawn
-    constexpr std::ptrdiff_t m_hPlayerController = cs2_dumper::schemas::client_dll::C_CSPlayerPawn::m_hPlayerController;
+    // Corrected from C_CSPlayerPawn::m_hPlayerController, which does not exist.
+    // Using C_BasePlayerPawn::m_hController instead.
+    constexpr std::ptrdiff_t m_hPlayerController = cs2_dumper::schemas::client_dll::C_BasePlayerPawn::m_hController;
 
     // CBasePlayerController
     constexpr std::ptrdiff_t m_iszPlayerName = cs2_dumper::schemas::client_dll::CBasePlayerController::m_iszPlayerName;
