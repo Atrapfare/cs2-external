@@ -1,3 +1,19 @@
+/*
+This is a stand alone bypass made by Apxaey. Feel free to use this in your cheats but credit me for the bypass as i put alot of time into this.
+If you have some brain cells you will be able to incorporate this into your cheats and remain undetected by user-mode anticheats.
+Obviously standard cheat 'recommendations' still apply:
+1.) Use self-written or not signatured code
+2.) Dont write impossible values
+3.) If your going internal use a manual map injector
+
+If you follow the guidelines above and use this bypass you will be safe from usermode anticheats like VAC.
+Obviously you can build and adapt upon my code to suit your needs.
+If I was to make a cheat for myself i would put this bypass into something i call an 'external internal' cheat.
+Whereby you make a cheat and inject into a legitimate program like discord and add a check to the this bypass to only hijack a handle from the process you inject into, giving the appearence that nothing is out of the ordinary
+However you can implement this bypass into any form of cheat, its your decision.
+If you need want some more info i recommend you watch my YT video on this bypass.
+Anyways if you want to see more of my stuff feel free to join my discord server https://discord.gg/GVyENvk. Here's my YT as well https://www.youtube.com/channel/UCPN6OOLxn1OaBP5jPThIiog.
+*/
 #include <iostream>
 #include <Windows.h>
 #include <TlHelp32.h>
@@ -7,58 +23,100 @@
 #include <chrono>
 #include <fcntl.h>
 #include <io.h>
+#include <string>
+
 #include "offsets.hpp"
 #include "client_dll.hpp"
 
-// Simple Vector3 structure for position
-struct Vector3 {
-    float x, y, z;
-};
+// ----------------------------------------------------------------
+// NTAPI definitions
+// ----------------------------------------------------------------
 
-// Placeholder namespace for offsets that were not found in the provided headers.
-// The values below are set to 0 and will likely cause incorrect behavior.
-// Please find the correct offsets for your game version and update them.
-namespace game_offsets {
-    constexpr std::ptrdiff_t m_iHealth = 0x34C; // C_BaseEntity->m_iHealth
-    constexpr std::ptrdiff_t m_pGameSceneNode = 0x330; // C_BaseEntity->m_pGameSceneNode
-    constexpr std::ptrdiff_t m_vecAbsOrigin = 0xD0; // CGameSceneNode->m_vecAbsOrigin
-}
+#define SeDebugPriv 20
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#define STATUS_INFO_LENGTH_MISMATCH ((NTSTATUS)0xC0000004)
+#define NtCurrentProcess ( (HANDLE)(LONG_PTR) -1 )
+#define ProcessHandleType 0x7
+#define SystemHandleInformation 16
 
-// This project is for educational purposes only, to demonstrate the concept of handle hijacking.
+// The structures for NTAPI calls like _UNICODE_STRING, _OBJECT_ATTRIBUTES,
+// and _CLIENT_ID are defined in <winternl.h>, which is already included.
+// The manual definitions have been removed to prevent redefinition errors.
 
-// Define constants for NTAPI functions, as they are not in standard headers.
-#define NT_SUCCESS(x) ((x) >= 0)
-#define STATUS_INFO_LENGTH_MISMATCH 0xC0000004
-
-// Structures for NtQuerySystemInformation
-typedef struct _SYSTEM_HANDLE {
+typedef struct _SYSTEM_HANDLE_TABLE_ENTRY_INFO {
     ULONG ProcessId;
     BYTE ObjectTypeNumber;
     BYTE Flags;
     USHORT Handle;
     PVOID Object;
     ACCESS_MASK GrantedAccess;
-} SYSTEM_HANDLE, *PSYSTEM_HANDLE;
+} SYSTEM_HANDLE, * PSYSTEM_HANDLE;
 
 typedef struct _SYSTEM_HANDLE_INFORMATION {
     ULONG HandleCount;
     SYSTEM_HANDLE Handles[1];
-} SYSTEM_HANDLE_INFORMATION, *PSYSTEM_HANDLE_INFORMATION;
+} SYSTEM_HANDLE_INFORMATION, * PSYSTEM_HANDLE_INFORMATION;
 
-// Function pointer for NtQuerySystemInformation
-typedef NTSTATUS(WINAPI *pfnNtQuerySystemInformation)(
+typedef NTSTATUS(NTAPI* _NtDuplicateObject)(
+    HANDLE SourceProcessHandle,
+    HANDLE SourceHandle,
+    HANDLE TargetProcessHandle,
+    PHANDLE TargetHandle,
+    ACCESS_MASK DesiredAccess,
+    ULONG Attributes,
+    ULONG Options
+);
+
+typedef NTSTATUS(NTAPI* _RtlAdjustPrivilege)(
+    ULONG Privilege,
+    BOOLEAN Enable,
+    BOOLEAN CurrentThread,
+    PBOOLEAN Enabled
+);
+
+typedef NTSYSAPI NTSTATUS(NTAPI* _NtOpenProcess)(
+    PHANDLE            ProcessHandle,
+    ACCESS_MASK        DesiredAccess,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    PCLIENT_ID         ClientId
+);
+
+typedef NTSTATUS(NTAPI* _NtQuerySystemInformation)(
     ULONG SystemInformationClass,
     PVOID SystemInformation,
     ULONG SystemInformationLength,
     PULONG ReturnLength
 );
 
-// Function to get the Process ID (PID) from a process name
+// ----------------------------------------------------------------
+// Helper and Core Functions
+// ----------------------------------------------------------------
+
+OBJECT_ATTRIBUTES InitObjectAttributes(PUNICODE_STRING name, ULONG attributes, HANDLE hRoot, PSECURITY_DESCRIPTOR security) {
+    OBJECT_ATTRIBUTES object;
+    object.Length = sizeof(OBJECT_ATTRIBUTES);
+    object.ObjectName = name;
+    object.Attributes = attributes;
+    object.RootDirectory = hRoot;
+    object.SecurityDescriptor = security;
+    object.SecurityQualityOfService = NULL;
+    return object;
+}
+
+bool IsHandleValid(HANDLE handle) {
+    return handle && handle != INVALID_HANDLE_VALUE;
+}
+
+// A corrected function to find a process ID by its name, using wide characters.
 DWORD GetProcessIdByName(const wchar_t* processName) {
     PROCESSENTRY32W entry;
     entry.dwSize = sizeof(PROCESSENTRY32W);
 
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (!IsHandleValid(snapshot)) {
+        std::wcerr << L"[-] CreateToolhelp32Snapshot failed." << std::endl;
+        return 0;
+    }
 
     if (Process32FirstW(snapshot, &entry)) {
         do {
@@ -73,11 +131,124 @@ DWORD GetProcessIdByName(const wchar_t* processName) {
     return 0;
 }
 
-// Function to get the base address of a module in a process
+// The refactored and corrected handle hijacking function.
+HANDLE HijackExistingHandle(DWORD dwTargetProcessId) {
+    HMODULE ntdll = GetModuleHandleA("ntdll");
+    if (!ntdll) {
+        std::wcerr << L"[-] Failed to get handle for ntdll.dll" << std::endl;
+        return NULL;
+    }
+
+    // Get NTAPI function pointers
+    auto RtlAdjustPrivilege = (_RtlAdjustPrivilege)GetProcAddress(ntdll, "RtlAdjustPrivilege");
+    auto NtQuerySystemInformation = (_NtQuerySystemInformation)GetProcAddress(ntdll, "NtQuerySystemInformation");
+    auto NtDuplicateObject = (_NtDuplicateObject)GetProcAddress(ntdll, "NtDuplicateObject");
+    auto NtOpenProcess = (_NtOpenProcess)GetProcAddress(ntdll, "NtOpenProcess");
+
+    if (!RtlAdjustPrivilege || !NtQuerySystemInformation || !NtDuplicateObject || !NtOpenProcess) {
+        std::wcerr << L"[-] Failed to get address of one or more NTAPI functions" << std::endl;
+        return NULL;
+    }
+
+    // Enable debug privilege
+    boolean oldPriv;
+    RtlAdjustPrivilege(SeDebugPriv, TRUE, FALSE, &oldPriv);
+
+    // Query all system handles
+    NTSTATUS ntRet;
+    ULONG size = sizeof(SYSTEM_HANDLE_INFORMATION);
+    SYSTEM_HANDLE_INFORMATION* hInfo = (SYSTEM_HANDLE_INFORMATION*)new(std::nothrow) byte[size];
+
+    if (!hInfo) {
+        std::wcerr << L"[-] Initial memory allocation failed for handle information." << std::endl;
+        return NULL;
+    }
+
+    while ((ntRet = NtQuerySystemInformation((SYSTEM_INFORMATION_CLASS)SystemHandleInformation, hInfo, size, &size)) == STATUS_INFO_LENGTH_MISMATCH) {
+        delete[] hInfo;
+        hInfo = (PSYSTEM_HANDLE_INFORMATION)new(std::nothrow) byte[size];
+        if (!hInfo) {
+            std::wcerr << L"[-] Bad Heap Allocation while querying system handles." << std::endl;
+            return NULL;
+        }
+    }
+
+    if (!NT_SUCCESS(ntRet)) {
+        std::wcerr << L"[-] NtQuerySystemInformation failed with status: " << std::hex << ntRet << std::endl;
+        delete[] hInfo;
+        return NULL;
+    }
+
+    // Iterate through handles to find a suitable one
+    HANDLE procHandle = NULL;
+    HANDLE hijackedHandle = NULL;
+    OBJECT_ATTRIBUTES obj_Attribute = InitObjectAttributes(NULL, 0, NULL, NULL);
+    CLIENT_ID clientID = { 0 };
+
+    for (unsigned int i = 0; i < hInfo->HandleCount; ++i) {
+        if (!IsHandleValid((HANDLE)hInfo->Handles[i].Handle) || hInfo->Handles[i].ObjectTypeNumber != ProcessHandleType) {
+            continue;
+        }
+
+        // We don't need to open our own process
+        if (hInfo->Handles[i].ProcessId == GetCurrentProcessId()) {
+            continue;
+        }
+
+        // Correctly set the client ID to the process ID of the handle's owner
+        clientID.UniqueProcess = (PVOID)(ULONG_PTR)hInfo->Handles[i].ProcessId;
+
+        if (IsHandleValid(procHandle)) {
+            CloseHandle(procHandle);
+        }
+
+        ntRet = NtOpenProcess(&procHandle, PROCESS_DUP_HANDLE, &obj_Attribute, &clientID);
+        if (!IsHandleValid(procHandle) || !NT_SUCCESS(ntRet)) {
+            continue;
+        }
+
+        ntRet = NtDuplicateObject(procHandle, (HANDLE)hInfo->Handles[i].Handle, NtCurrentProcess, &hijackedHandle, PROCESS_ALL_ACCESS, 0, 0);
+        if (!IsHandleValid(hijackedHandle) || !NT_SUCCESS(ntRet)) {
+            continue;
+        }
+
+        if (GetProcessId(hijackedHandle) == dwTargetProcessId) {
+            std::wcout << L"[+] Success! Hijacked a handle to process " << dwTargetProcessId << " from process " << hInfo->Handles[i].ProcessId << std::endl;
+            // Found the handle, clean up and return it
+            CloseHandle(procHandle);
+            delete[] hInfo;
+            return hijackedHandle;
+        }
+
+        CloseHandle(hijackedHandle);
+    }
+
+    // Cleanup if no handle was found
+    if (IsHandleValid(procHandle)) CloseHandle(procHandle);
+    delete[] hInfo;
+    std::wcerr << L"[-] Could not find a suitable handle to hijack." << std::endl;
+    return NULL;
+}
+
+
+// ----------------------------------------------------------------
+// Original code from main.cpp
+// ----------------------------------------------------------------
+
+struct Vector3 {
+    float x, y, z;
+};
+
+namespace game_offsets {
+    constexpr std::ptrdiff_t m_iHealth = 0x34C;
+    constexpr std::ptrdiff_t m_pGameSceneNode = 0x330;
+    constexpr std::ptrdiff_t m_vecAbsOrigin = 0xD0;
+}
+
 uintptr_t GetModuleBaseAddress(DWORD procId, const wchar_t* modName) {
     uintptr_t modBaseAddr = 0;
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, procId);
-    if (hSnap != INVALID_HANDLE_VALUE) {
+    if (IsHandleValid(hSnap)) {
         MODULEENTRY32W modEntry;
         modEntry.dwSize = sizeof(modEntry);
         if (Module32FirstW(hSnap, &modEntry)) {
@@ -93,97 +264,16 @@ uintptr_t GetModuleBaseAddress(DWORD procId, const wchar_t* modName) {
     return modBaseAddr;
 }
 
-// The core function to perform handle hijacking
-HANDLE HijackExistingHandle(DWORD targetPid) {
-    HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
-    if (!hNtdll) {
-        std::wcerr << L"[-] Failed to get handle for ntdll.dll" << std::endl;
-        return NULL;
-    }
-
-    pfnNtQuerySystemInformation NtQuerySystemInformation = (pfnNtQuerySystemInformation)GetProcAddress(hNtdll, "NtQuerySystemInformation");
-    if (!NtQuerySystemInformation) {
-        std::wcerr << L"[-] Failed to get address of NtQuerySystemInformation" << std::endl;
-        return NULL;
-    }
-
-    NTSTATUS status;
-    ULONG bufferSize = 0x10000; // Initial buffer size
-    PSYSTEM_HANDLE_INFORMATION handleInfo = (PSYSTEM_HANDLE_INFORMATION)malloc(bufferSize);
-
-    if (!handleInfo) {
-        std::wcerr << L"[-] Failed to allocate memory for handle information." << std::endl;
-        return NULL;
-    }
-
-    // Retry loop for NtQuerySystemInformation
-    while ((status = NtQuerySystemInformation(static_cast<SYSTEM_INFORMATION_CLASS>(16), handleInfo, bufferSize, &bufferSize)) == STATUS_INFO_LENGTH_MISMATCH) {
-        handleInfo = (PSYSTEM_HANDLE_INFORMATION)realloc(handleInfo, bufferSize);
-        if (!handleInfo) {
-            std::wcerr << L"[-] Failed to reallocate memory for handle information." << std::endl;
-            return NULL;
-        }
-    }
-
-    if (!NT_SUCCESS(status)) {
-        std::wcerr << L"[-] NtQuerySystemInformation failed with status: " << std::hex << status << std::endl;
-        free(handleInfo);
-        return NULL;
-    }
-
-    std::wcout << L"[+] Found " << handleInfo->HandleCount << L" system handles." << std::endl;
-
-    for (ULONG i = 0; i < handleInfo->HandleCount; i++) {
-        SYSTEM_HANDLE handle = handleInfo->Handles[i];
-
-        if (handle.ProcessId == GetCurrentProcessId() || handle.ProcessId == targetPid) {
-            continue;
-        }
-
-        if ((handle.GrantedAccess & PROCESS_VM_READ) != PROCESS_VM_READ) {
-            continue;
-        }
-
-        HANDLE hSourceProcess = OpenProcess(PROCESS_DUP_HANDLE, FALSE, handle.ProcessId);
-        if (!hSourceProcess) {
-            continue;
-        }
-
-        HANDLE hDup = NULL;
-        status = DuplicateHandle(hSourceProcess, (HANDLE)handle.Handle, GetCurrentProcess(), &hDup, 0, FALSE, DUPLICATE_SAME_ACCESS);
-        CloseHandle(hSourceProcess);
-
-        if (!NT_SUCCESS(status)) {
-            continue;
-        }
-
-        if (GetProcessId(hDup) == targetPid) {
-            std::wcout << L"[+] Success! Hijacked a handle to CS2 (PID: " << targetPid << L") from process with PID: " << handle.ProcessId << std::endl;
-            std::wcout << L"[+] Handle value: 0x" << std::hex << (DWORD_PTR)hDup << std::endl;
-            free(handleInfo);
-            return hDup;
-        }
-
-        CloseHandle(hDup);
-    }
-
-    std::wcerr << L"[-] Could not find a suitable handle to hijack." << std::endl;
-    free(handleInfo);
-    return NULL;
-}
-
-// Generic ReadProcessMemory wrapper
 template <typename T>
 T Read(HANDLE hProcess, uintptr_t address) {
     T value;
-    SIZE_T bytesRead;
-    ReadProcessMemory(hProcess, (LPCVOID)address, &value, sizeof(T), &bytesRead);
+    ReadProcessMemory(hProcess, (LPCVOID)address, &value, sizeof(T), NULL);
     return value;
 }
 
 int main() {
-	_setmode(_fileno(stdout), _O_U16TEXT);
-	_setmode(_fileno(stderr), _O_U16TEXT);
+    _setmode(_fileno(stdout), _O_U16TEXT);
+    _setmode(_fileno(stderr), _O_U16TEXT);
 
     std::wcout << L"--- CS2 Player Information Tool ---" << std::endl;
     std::wcout << L"[*] Searching for CS2 process..." << std::endl;
@@ -193,7 +283,6 @@ int main() {
 
     if (pid == 0) {
         std::wcerr << L"[-] Could not find process: " << processName << L". Is the game running?" << std::endl;
-        system("pause");
         return 1;
     }
     std::wcout << L"[+] Found CS2 process with PID: " << pid << std::endl;
@@ -203,7 +292,6 @@ int main() {
 
     if (!hCs2) {
         std::wcerr << L"[-] Failed to get a handle to CS2 via hijacking." << std::endl;
-        system("pause");
         return 1;
     }
 
@@ -213,7 +301,6 @@ int main() {
     if (clientBase == 0) {
         std::wcerr << L"[-] Could not find " << clientDllName << L" in the process." << std::endl;
         CloseHandle(hCs2);
-        system("pause");
         return 1;
     }
     std::wcout << L"[+] Found " << clientDllName << L" at address: 0x" << std::hex << clientBase << std::endl;
@@ -224,31 +311,27 @@ int main() {
     std::wcout << L"\n--- Starting Player Data Loop ---" << std::endl;
 
     while (true) {
-        system("cls"); // Clear console for fresh data
+        system("cls");
         std::wcout << L"--- Player Information ---" << std::endl;
         std::wcout << L"Name\t\tHealth\t\tPosition (X, Y, Z)" << std::endl;
         std::wcout << L"--------------------------------------------------------" << std::endl;
 
-        for (int i = 1; i <= 64; ++i) { // Iterate through possible players
+        for (int i = 1; i <= 64; ++i) {
             uintptr_t listEntry = Read<uintptr_t>(hCs2, entityListAddr + (8 * (i & 0x1FF)));
             if (!listEntry) continue;
 
             uintptr_t playerController = Read<uintptr_t>(hCs2, listEntry + 0x10);
             if (!playerController) continue;
 
-            // Get Player Pawn
-            // NOTE: The original code used `game_offsets::m_hPlayerController`, which is not defined in the provided headers.
-            // Based on the context (getting a pawn handle from a controller), it has been replaced with `CBasePlayerController::m_hPawn`.
             uint32_t playerPawnHandle = Read<uint32_t>(hCs2, playerController + cs2_dumper::schemas::client_dll::CBasePlayerController::m_hPawn);
             if (playerPawnHandle == 0xFFFFFFFF) continue;
 
             uintptr_t listEntry2 = Read<uintptr_t>(hCs2, entityListAddr + (0x8 * ((playerPawnHandle & 0x7FFF) >> 9)) + 0x10);
-            if(!listEntry2) continue;
+            if (!listEntry2) continue;
 
             uintptr_t playerPawn = Read<uintptr_t>(hCs2, listEntry2 + (0x78 * (playerPawnHandle & 0x1FF)));
             if (!playerPawn) continue;
 
-            // Read player data
             int health = Read<int>(hCs2, playerPawn + game_offsets::m_iHealth);
             if (health <= 0 || health > 100) continue;
 
@@ -260,21 +343,17 @@ int main() {
             char playerName[128];
             ReadProcessMemory(hCs2, (LPCVOID)(playerController + cs2_dumper::schemas::client_dll::CBasePlayerController::m_iszPlayerName), &playerName, sizeof(playerName), NULL);
 
-			wchar_t widePlayerName[128];
-			MultiByteToWideChar(CP_UTF8, 0, playerName, -1, widePlayerName, 128);
+            wchar_t widePlayerName[128];
+            MultiByteToWideChar(CP_UTF8, 0, playerName, -1, widePlayerName, 128);
 
-            // Print player data
             std::wcout << widePlayerName << L"\t\t"
-                      << health << L"\t\t"
-                      << position.x << L", " << position.y << L", " << position.z << std::endl;
+                << health << L"\t\t"
+                << position.x << L", " << position.y << L", " << position.z << std::endl;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Update every second
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 
-    // 5. Clean up (though loop is infinite)
     CloseHandle(hCs2);
-    std::wcout << L"[+] Closed hijacked handle. Program finished." << std::endl;
-    system("pause");
     return 0;
 }
