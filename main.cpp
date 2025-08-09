@@ -40,6 +40,7 @@ Anyways if you want to see more of my stuff feel free to join my discord server 
 #define SystemHandleInformation 16
 
 
+
 typedef struct _MY_UNICODE_STRING {
     USHORT Length;
     USHORT MaximumLength;
